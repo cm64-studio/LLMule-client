@@ -1,6 +1,4 @@
-// src/networkClient.js
 const WebSocket = require('ws');
-const { prompt } = require('enquirer');
 const config = require('./config');
 const ModelDetector = require('./modelDetector');
 const { OllamaClient, LMStudioClient } = require('./llmClients');
@@ -14,47 +12,68 @@ class NetworkClient {
       lmstudio: new LMStudioClient()
     };
     this.models = [];
+    this.isConnected = false;
+    this.activeModels = new Set();
+    this.maxConcurrentModels = parseInt(process.env.MAX_CONCURRENT_MODELS || '2');
   }
 
-  async connect() {
-    if (!config.api_key) {
-      console.error('API key required in environment variables');
-      process.exit(1);
+  async start() {
+    while (true) {
+      try {
+        if (!this.isConnected) {
+          await this.detectAndConnect();
+        }
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      } catch (error) {
+        console.error('Connection error:', error);
+        this.isConnected = false;
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
     }
+  }
 
+  async detectAndConnect() {
     console.log('\n🚀 Starting LLM detection...');
     const availableModels = await this.modelDetector.detectAll();
     
     if (availableModels.length === 0) {
       console.error('\n❌ No local LLM models detected!');
-      process.exit(1);
+      throw new Error('No models detected');
     }
 
-    // Filter models based on SHARED_MODELS env var
-    const sharedModelNames = process.env.SHARED_MODELS?.split(',') || [];
-    this.models = availableModels.filter(model => 
-      sharedModelNames.length === 0 || sharedModelNames.includes(model.name)
-    );
-
-    if (this.models.length === 0) {
-      console.error('No matching models found for sharing');
-      process.exit(1);
-    }
-
-    console.log(`\n✅ Selected models: ${this.models.map(m => m.name).join(', ')}`);
-    this.connectWebSocket();
+    this.models = availableModels;
+    console.log(`\n✅ Detected models: ${this.models.map(m => m.name).join(', ')}`);
+    await this.connect();
   }
 
-  connectWebSocket() {
+  async connect() {
     console.log(`\n🔌 Connecting to ${config.server_url}...`);
     this.ws = new WebSocket(config.server_url);
     
     this.ws.on('open', () => {
       console.log('✅ Connected to P2P LLM network');
+      this.isConnected = true;
       this.register();
     });
 
-    // Rest of the WebSocket handlers remain the same
+    this.ws.on('message', async (data) => {
+      try {
+        const message = JSON.parse(data);
+        await this.handleMessage(message);
+      } catch (error) {
+        console.error('Error handling message:', error);
+      }
+    });
+
+    this.ws.on('close', () => {
+      console.log('❌ Disconnected from network');
+      this.isConnected = false;
+    });
+
+    this.ws.on('error', (error) => {
+      console.error('🚨 WebSocket error:', error.message);
+      this.isConnected = false;
+    });
   }
 
   register() {
@@ -69,11 +88,9 @@ class NetworkClient {
     };
   
     console.log('Sending registration message:', registrationMessage);
-    
     this.ws.send(JSON.stringify(registrationMessage));
     console.log('📝 Registration message sent');
   
-    // Verify registration by sending an immediate ping
     setTimeout(() => {
       console.log('Sending post-registration ping...');
       this.ws.send(JSON.stringify({ type: 'ping' }));
@@ -86,71 +103,79 @@ class NetworkClient {
     
     switch (message.type) {
       case 'ping':
-        console.log('Responding to ping...');
         this.ws.send(JSON.stringify({ type: 'pong' }));
         break;
 
       case 'completion_request':
-        try {
-          console.log('Received completion request for model:', message.model);
-          await this.handleCompletionRequest(message);
-        } catch (error) {
-          console.error('Error handling completion request:', error);
-          this.ws.send(JSON.stringify({
-            type: 'completion_response',
-            requestId: message.requestId,
-            error: error.message
-          }));
-        }
+        await this.handleCompletionRequest(message);
         break;
     }
   }
 
   async handleCompletionRequest(message) {
     console.log('\n=== Processing Completion Request ===');
-    console.log('Request details:', {
-        model: message.model,
-        messageCount: message.messages.length,
-        requestId: message.requestId,
-        temperature: message.temperature || 0.7,  // Default temperature
-        max_tokens: message.max_tokens || 4096    // Default max_tokens
-    });
+    console.log('Request for model:', message.model);
 
-    const model = this.models.find(m => m.name === message.model);
-    if (!model) {
-        throw new Error(`Model ${message.model} not found in available models`);
-    }
-
-    const client = this.llmClients[model.type];
-    if (!client) {
-        throw new Error(`No client available for model type: ${model.type}`);
+    const modelInfo = this.models.find(m => m.name === message.model);
+    if (!modelInfo) {
+      console.error(`Model ${message.model} not available`);
+      return;
     }
 
     try {
-        console.log('Generating completion with local LLM...');
-        const response = await client.generateCompletion(
-            model.name,
-            message.messages,
-            {
-                temperature: message.temperature || 0.7,
-                max_tokens: message.max_tokens || 4096,
-                stream: false
-            }
-        );
+      // Check if we can handle another model
+      if (this.activeModels.size >= this.maxConcurrentModels &&
+          !this.activeModels.has(message.model)) {
+        throw new Error('Maximum concurrent models reached');
+      }
 
-        console.log('Completion generated successfully');
-        
-        this.ws.send(JSON.stringify({
-            type: 'completion_response',
-            requestId: message.requestId,
-            response
-        }));
+      this.activeModels.add(message.model);
+      const client = this.llmClients[modelInfo.type];
+      
+      const response = await client.generateCompletion(
+        modelInfo.name,
+        message.messages,
+        {
+          temperature: message.temperature,
+          max_tokens: message.max_tokens
+        }
+      );
+
+      this.ws.send(JSON.stringify({
+        type: 'completion_response',
+        requestId: message.requestId,
+        response
+      }));
 
     } catch (error) {
-        console.error('Error generating completion:', error);
-        throw new Error(`Completion generation failed: ${error.message}`);
+      console.error(`Error processing request for ${message.model}:`, error);
+      this.ws.send(JSON.stringify({
+        type: 'completion_response',
+        requestId: message.requestId,
+        error: error.message
+      }));
+    } finally {
+      this.activeModels.delete(message.model);
+    }
+  }
+
+  async cleanup() {
+    if (this.ws) {
+      this.ws.close();
     }
   }
 }
+
+// Handle process termination
+process.on('SIGINT', async () => {
+  console.log('\nGracefully shutting down...');
+  const client = new NetworkClient();
+  await client.cleanup();
+  process.exit(0);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled promise rejection:', error);
+});
 
 module.exports = { NetworkClient };

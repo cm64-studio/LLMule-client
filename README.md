@@ -1,4 +1,4 @@
-    # LLMule Client
+# LLMule Client
 
 A peer-to-peer client for sharing Large Language Models (LLMs) across the LLMule network. Run your local LLMs and share them with the community.
 

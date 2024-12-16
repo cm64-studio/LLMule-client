@@ -167,46 +167,46 @@ class NetworkClient {
   async handleCompletionRequest(message) {
     console.log('\n=== Processing Completion Request ===');
     console.log('Request details:', {
-      model: message.model,
-      messageCount: message.messages.length,
-      requestId: message.requestId
+        model: message.model,
+        messageCount: message.messages.length,
+        requestId: message.requestId,
+        temperature: message.temperature || 0.7,  // Default temperature
+        max_tokens: message.max_tokens || 4096    // Default max_tokens
     });
 
-    // Find the model in our available models
     const model = this.models.find(m => m.name === message.model);
     if (!model) {
-      throw new Error(`Model ${message.model} not found in available models`);
+        throw new Error(`Model ${message.model} not found in available models`);
     }
 
-    // Get the appropriate client for this model type
     const client = this.llmClients[model.type];
     if (!client) {
-      throw new Error(`No client available for model type: ${model.type}`);
+        throw new Error(`No client available for model type: ${model.type}`);
     }
 
     try {
-      console.log('Generating completion with local LLM...');
-      const response = await client.generateCompletion(
-        model.name,
-        message.messages,
-        {
-          temperature: message.temperature,
-          max_tokens: message.max_tokens
-        }
-      );
+        console.log('Generating completion with local LLM...');
+        const response = await client.generateCompletion(
+            model.name,
+            message.messages,
+            {
+                temperature: message.temperature || 0.7,
+                max_tokens: message.max_tokens || 4096,
+                stream: false
+            }
+        );
 
-      console.log('Completion generated successfully');
-      
-      // Send the response back to the server
-      this.ws.send(JSON.stringify({
-        type: 'completion_response',
-        requestId: message.requestId,
-        response
-      }));
+        console.log('Completion generated successfully');
+        
+        this.ws.send(JSON.stringify({
+            type: 'completion_response',
+            requestId: message.requestId,
+            response
+        }));
 
     } catch (error) {
-      console.error('Error generating completion:', error);
-      throw new Error(`Completion generation failed: ${error.message}`);
+        console.error('Error generating completion:', error);
+        throw new Error(`Completion generation failed: ${error.message}`);
     }
   }
 }

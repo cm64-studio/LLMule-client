@@ -7,7 +7,7 @@ class ModelDetector {
     console.log('Checking for Ollama models...');
     try {
       const response = await axios.get(`${config.ollama_url}/api/tags`);
-      if (response.data && response.data.models) {
+      if (Array.isArray(response.data.models)) {
         const models = response.data.models;
         console.log(`Found ${models.length} Ollama models`);
         return models.map(model => ({
@@ -17,7 +17,7 @@ class ModelDetector {
       }
       return [];
     } catch (error) {
-      console.log('⚠️ Ollama not detected (Is it running on port 11434?)');
+      console.error('Ollama error:', error.response?.data || error.message);
       return [];
     }
   }

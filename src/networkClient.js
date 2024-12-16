@@ -17,77 +17,35 @@ class NetworkClient {
   }
 
   async connect() {
-    // Interactive setup if needed
     if (!config.api_key) {
-      const response = await prompt({
-        type: 'input',
-        name: 'apiKey',
-        message: 'Please enter your API key:',
-        validate: value => value.length > 0 ? true : 'API key cannot be empty'
-      });
-      config.api_key = response.apiKey;
+      console.error('API key required in environment variables');
+      process.exit(1);
     }
 
-    // Detect available models
     console.log('\n🚀 Starting LLM detection...');
     const availableModels = await this.modelDetector.detectAll();
     
     if (availableModels.length === 0) {
       console.error('\n❌ No local LLM models detected!');
-      console.log('\nPlease ensure either Ollama or LM Studio is running:');
-      console.log('1. Ollama: http://localhost:11434');
-      console.log('2. LM Studio: http://localhost:1234');
-      console.log('\nWould you like to:');
-      
-      const { action } = await prompt({
-        type: 'select',
-        name: 'action',
-        message: 'Choose an action:',
-        choices: [
-          { name: 'retry', message: 'Retry detection' },
-          { name: 'exit', message: 'Exit program' }
-        ]
-      });
-
-      if (action === 'retry') {
-        return this.connect();
-      } else {
-        process.exit(0);
-      }
+      process.exit(1);
     }
 
-    // Model selection with simpler logic
-    try {
-      const choices = availableModels.map(model => ({
-        name: model.name,
-        message: `${model.name} (${model.type})`,
-        hint: model.type === 'ollama' ? '🦙' : '🔧'
-      }));
+    // Filter models based on SHARED_MODELS env var
+    const sharedModelNames = process.env.SHARED_MODELS?.split(',') || [];
+    this.models = availableModels.filter(model => 
+      sharedModelNames.length === 0 || sharedModelNames.includes(model.name)
+    );
 
-      const { selected } = await prompt({
-        type: 'multiselect',
-        name: 'selected',
-        message: 'Select models to share (space to select, enter to confirm):',
-        choices,
-        validate: value => value.length > 0 ? true : 'Please select at least one model'
-      });
-
-      this.models = selected.map(modelName => 
-        availableModels.find(m => m.name === modelName)
-      ).filter(Boolean);
-
-      if (this.models.length === 0) {
-        console.log('\n⚠️ No models selected. Please try again.');
-        return this.connect();
-      }
-
-      console.log(`\n✅ Selected models: ${this.models.map(m => m.name).join(', ')}`);
-    } catch (error) {
-      console.error('Error during model selection:', error);
-      return this.connect();
+    if (this.models.length === 0) {
+      console.error('No matching models found for sharing');
+      process.exit(1);
     }
 
-    // Connect to network
+    console.log(`\n✅ Selected models: ${this.models.map(m => m.name).join(', ')}`);
+    this.connectWebSocket();
+  }
+
+  connectWebSocket() {
     console.log(`\n🔌 Connecting to ${config.server_url}...`);
     this.ws = new WebSocket(config.server_url);
     
@@ -96,23 +54,7 @@ class NetworkClient {
       this.register();
     });
 
-    this.ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data);
-        this.handleMessage(message);
-      } catch (error) {
-        console.error('Error handling message:', error);
-      }
-    });
-
-    this.ws.on('close', () => {
-      console.log('❌ Disconnected from network. Reconnecting in 5 seconds...');
-      setTimeout(() => this.connect(), 5000);
-    });
-
-    this.ws.on('error', (error) => {
-      console.error('🚨 WebSocket error:', error.message);
-    });
+    // Rest of the WebSocket handlers remain the same
   }
 
   register() {

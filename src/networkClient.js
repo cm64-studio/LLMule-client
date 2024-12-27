@@ -118,21 +118,18 @@ class NetworkClient {
 
   async connect() {
     console.log(`\n🔌 Connecting to ${config.server_url}...`);
-
-    // Include API key in WebSocket connection
-    const wsUrl = new URL(config.server_url);
+  
     this.ws = new WebSocket(config.server_url, {
-      headers: {
-        'Authorization': `Bearer ${config.api_key}`
-      }
+      headers: { 'Authorization': `Bearer ${config.api_key}` }
     });
-
+  
     this.ws.on('open', () => {
       console.log('✅ Connected to P2P LLM network');
       this.isConnected = true;
+      this.ws.on('ping', () => this.ws.pong());
       this.register();
     });
-
+  
     this.ws.on('message', async (data) => {
       try {
         const message = JSON.parse(data);
@@ -141,18 +138,20 @@ class NetworkClient {
         console.error('Error handling message:', error);
       }
     });
-
+  
+    this.ws.on('pong', () => {
+      this.lastPong = Date.now();
+    });
+  
     this.ws.on('close', (code, reason) => {
       console.log(`❌ Disconnected from network: ${reason} (${code})`);
       this.isConnected = false;
-
-      // Handle authentication errors
       if (code === 4001) {
         console.error('Authentication failed. Please check your API key');
         process.exit(1);
       }
     });
-
+  
     this.ws.on('error', (error) => {
       console.error('🚨 WebSocket error:', error.message);
       this.isConnected = false;
@@ -160,44 +159,39 @@ class NetworkClient {
   }
 
   register() {
-    const modelNames = this.models.map(m => m.name);
-    console.log('\n=== Registering with network ===');
-    console.log('Models to register:', modelNames);
-
     const registrationMessage = {
       type: 'register',
       apiKey: config.api_key,
-      models: modelNames
+      models: this.models.map(m => m.name)
     };
-
-    console.log('Sending registration message:', registrationMessage);
+  
+    console.log('📝 Registering with network...');
     this.ws.send(JSON.stringify(registrationMessage));
-    console.log('📝 Registration message sent');
-
-    setTimeout(() => {
-      console.log('Sending post-registration ping...');
-      this.ws.send(JSON.stringify({ type: 'ping' }));
-    }, 1000);
   }
 
   async handleMessage(message) {
-    console.log('\n=== Received message from server ===');
-    console.log('Message type:', message.type);
+  console.log('\n=== Received message from server ===');
+  console.log('Message type:', message.type);
 
-    switch (message.type) {
-      case 'ping':
-        this.ws.send(JSON.stringify({ type: 'pong' }));
-        break;
+  switch (message.type) {
+    case 'ping':
+      this.ws.send(JSON.stringify({ type: 'pong' }));
+      break;
 
-      case 'completion_request':
-        await this.handleCompletionRequest(message);
-        break;
+    case 'completion_request':
+      await this.handleCompletionRequest(message);
+      break;
 
-      case 'auth_error':
-        console.error('❌ Authentication error:', message.error);
-        this.cleanup();
-        process.exit(1);
-        break;
+    case 'registered':
+      console.log('Successfully registered with network');
+      break;
+      
+    case 'error':
+      console.log('Server error:', message.error);
+      break;
+
+    default:
+      console.warn('Unknown message type:', message.type);
     }
   }
 

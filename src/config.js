@@ -6,7 +6,15 @@ const config = {
   api_url: process.env.API_URL || 'http://localhost:3000',
   api_key: process.env.API_KEY,
   ollama_url: process.env.OLLAMA_URL || 'http://localhost:11434',
-  lmstudio_url: process.env.LMSTUDIO_URL || 'http://localhost:1234/v1'
+  lmstudio_url: process.env.LMSTUDIO_URL || 'http://localhost:1234/v1',
+  exo_url: process.env.EXO_URL || 'http://localhost:52415',
+  
+  // Service ports for detection
+  service_ports: {
+    ollama: 11434,
+    lmstudio: 1234,
+    exo: 52415
+  }
 };
 
 module.exports = config;

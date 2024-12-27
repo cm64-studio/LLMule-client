@@ -96,4 +96,57 @@ class LMStudioClient extends LLMClient {
   }
 }
 
-module.exports = { OllamaClient, LMStudioClient };
+class ExoClient extends LLMClient {
+  async generateCompletion(model, messages, options = {}) {
+    try {
+      console.log('Sending request to EXO:', {
+        model,
+        messageCount: messages.length,
+        options
+      });
+
+      const response = await axios.post(
+        `${config.exo_url}/v1/chat/completions`,
+        {
+          model,
+          messages,
+          temperature: options.temperature || 0.7,
+          max_tokens: options.max_tokens || 4096,
+          stream: false
+        },
+        {
+          timeout: 60000 // 60 second timeout
+        }
+      );
+
+      // EXO already returns OpenAI-compatible format
+      return {
+        choices: response.data.choices,
+        usage: response.data.usage || {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0
+        }
+      };
+
+    } catch (error) {
+      console.error('EXO error:', error.response?.data || error.message);
+      throw new Error(`EXO error: ${error.message}`);
+    }
+  }
+
+  async getAvailableModels() {
+    try {
+      const response = await axios.get(`${config.exo_url}/v1/models`);
+      return response.data.data.map(model => ({
+        name: model.id,
+        type: 'exo'
+      }));
+    } catch (error) {
+      console.error('Failed to fetch EXO models:', error.message);
+      return [];
+    }
+  }
+}
+
+module.exports = { OllamaClient, LMStudioClient, ExoClient };

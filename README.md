@@ -55,17 +55,35 @@ MAX_RETRIES=5
 
 ## Supported Models
 
-### Tier 1 - Tiny (3B)
+### Tier 1 - Small (3B)
 - TinyLlama
 - Minimum Requirements: 4GB RAM
 
-### Tier 2 - Small (7B)
+### Tier 2 - Medium (7B)
 - Mistral 7B
 - Minimum Requirements: 8GB RAM
 
-### Tier 3 - Medium (14B)
+### Tier 3 - Large (14B)
 - Microsoft Phi-4
 - Minimum Requirements: 16GB RAM
+
+## Supported LLM Providers
+
+LLMule supports the following LLM providers:
+
+- **Ollama**: Run models like Llama, Mistral, and more locally
+- **LM Studio**: Run various open-source models with a nice UI
+- **EXO**: Run distributed models across multiple devices
+
+### Configuration
+
+Set up your providers in your `.env` file:
+
+```env
+OLLAMA_URL=http://localhost:11434
+LMSTUDIO_URL=http://localhost:1234/v1
+EXO_URL=http://localhost:52415
+```
 
 ## Usage
 

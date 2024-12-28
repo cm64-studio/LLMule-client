@@ -21,22 +21,49 @@ class OllamaClient extends LLMClient {
         model,
         messages,
         stream: false,
-        ...options
+        options: {
+          temperature: options.temperature || 0.7,
+          num_predict: options.max_tokens || 4096,
+        }
       });
+
+      // Ensure proper usage calculation for Ollama
+      const usage = {
+        prompt_tokens: this._estimateTokenCount(messages),
+        completion_tokens: this._estimateTokenCount([response.data.message]),
+        total_tokens: 0 // Will be calculated below
+      };
+
+      usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
 
       return {
         choices: [{
           message: {
             role: 'assistant',
             content: response.data.message.content
-          }
+          },
+          finish_reason: 'stop'
         }],
-        usage: response.data.usage || {}
+        usage
       };
     } catch (error) {
       console.error('Ollama error:', error.response?.data || error.message);
       throw new Error(`Ollama error: ${error.message}`);
     }
+  }
+
+  // Helper method to estimate token count
+  _estimateTokenCount(messages) {
+    let totalChars = 0;
+    messages.forEach(msg => {
+      if (typeof msg === 'string') {
+        totalChars += msg.length;
+      } else if (msg.content) {
+        totalChars += msg.content.length;
+      }
+    });
+    // Rough estimate: avg 4 chars per token
+    return Math.ceil(totalChars / 4);
   }
 }
 

@@ -23,6 +23,46 @@ class NetworkClient {
     this.maxConcurrentModels = parseInt(process.env.MAX_CONCURRENT_MODELS || '2');
   }
 
+  async getUserInfo() {
+    try {
+      console.log('Getting user info with API key:', config.api_key);
+      
+      const response = await axios.get(`${config.api_url}/auth/me`, {
+        headers: { 
+          'Authorization': `Bearer ${config.api_key}`,
+          'Accept': 'application/json'
+        },
+        validateStatus: false // To get full response for debugging
+      });
+  
+      console.log('User info response:', {
+        status: response.status,
+        headers: response.headers,
+        data: response.data
+      });
+  
+      if (response.status !== 200) {
+        console.error('User info request failed:', {
+          status: response.status,
+          data: response.data
+        });
+        return null;
+      }
+  
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get user info:', {
+        message: error.message,
+        response: error.response?.data,
+        config: {
+          url: error.config?.url,
+          headers: error.config?.headers
+        }
+      });
+      return null;
+    }
+  }
+
   async detectAndConnect() {
     try {
       const availableModels = await this.modelDetector.detectAll();
@@ -123,75 +163,114 @@ class NetworkClient {
       headers: { 'Authorization': `Bearer ${config.api_key}` }
     });
   
-    this.ws.on('open', () => {
-      console.log('✅ Connected to P2P LLM network');
-      this.isConnected = true;
-      this.ws.on('ping', () => this.ws.pong());
-      this.register();
-    });
+    // Return a promise for the connection
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Connection timeout'));
+      }, 15000); // 15 second timeout
   
-    this.ws.on('message', async (data) => {
-      try {
-        const message = JSON.parse(data);
-        await this.handleMessage(message);
-      } catch (error) {
-        console.error('Error handling message:', error);
-      }
-    });
+      this.ws.on('open', async () => {
+        clearTimeout(timeout);
+        console.log('✅ Connected to P2P LLM network');
+        this.isConnected = true;
+        this.ws.on('ping', () => this.ws.pong());
+        
+        try {
+          await this.register();
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
   
-    this.ws.on('pong', () => {
-      this.lastPong = Date.now();
-    });
+      this.ws.on('message', async (data) => {
+        try {
+          const message = JSON.parse(data);
+          await this.handleMessage(message);
+        } catch (error) {
+          console.error('Error handling message:', error);
+        }
+      });
   
-    this.ws.on('close', (code, reason) => {
-      console.log(`❌ Disconnected from network: ${reason} (${code})`);
-      this.isConnected = false;
-      if (code === 4001) {
-        console.error('Authentication failed. Please check your API key');
-        process.exit(1);
-      }
-    });
+      this.ws.on('pong', () => {
+        this.lastPong = Date.now();
+      });
   
-    this.ws.on('error', (error) => {
-      console.error('🚨 WebSocket error:', error.message);
-      this.isConnected = false;
+      this.ws.on('close', (code, reason) => {
+        console.log(`❌ Disconnected from network: ${reason} (${code})`);
+        this.isConnected = false;
+        if (code === 4001) {
+          console.error('Authentication failed. Please check your API key');
+          reject(new Error('Authentication failed'));
+        }
+      });
+  
+      this.ws.on('error', (error) => {
+        console.error('🚨 WebSocket error:', error.message);
+        this.isConnected = false;
+        reject(error);
+      });
     });
   }
 
-  register() {
-    const registrationMessage = {
-      type: 'register',
-      apiKey: config.api_key,
-      models: this.models.map(m => m.name)
-    };
+
+  async register() {
+    try {
+      const userInfo = await this.getUserInfo();
+      console.log('Got user info for registration:', userInfo);
   
-    console.log('📝 Registering with network...');
-    this.ws.send(JSON.stringify(registrationMessage));
+      if (!userInfo || !userInfo.userId) {
+        console.error('Invalid user info received:', userInfo);
+        throw new Error('Failed to get valid user info for registration');
+      }
+  
+      const registrationMessage = {
+        type: 'register',
+        apiKey: config.api_key,
+        models: this.models.map(m => m.name),
+        userId: userInfo.userId, // Include the MongoDB userId
+        provider: userInfo.provider // Include provider info if available
+      };
+  
+      console.log('📝 Sending registration message:', {
+        userId: userInfo.userId,
+        modelCount: registrationMessage.models.length,
+        models: registrationMessage.models
+      });
+  
+      this.ws.send(JSON.stringify(registrationMessage));
+    } catch (error) {
+      console.error('Registration failed:', error.message);
+      this.isConnected = false;
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.close();
+      }
+    }
   }
 
   async handleMessage(message) {
-  console.log('\n=== Received message from server ===');
-  console.log('Message type:', message.type);
+    console.log('\n=== Received message from server ===');
+    console.log('Message type:', message.type);
 
-  switch (message.type) {
-    case 'ping':
-      this.ws.send(JSON.stringify({ type: 'pong' }));
-      break;
+    switch (message.type) {
+      case 'ping':
+        this.ws.send(JSON.stringify({ type: 'pong' }));
+        break;
 
-    case 'completion_request':
-      await this.handleCompletionRequest(message);
-      break;
+      case 'completion_request':
+        await this.handleCompletionRequest(message);
+        break;
 
-    case 'registered':
-      console.log('Successfully registered with network');
-      break;
-      
-    case 'error':
-      console.log('Server error:', message.error);
-      break;
+      case 'registered':
+        console.log('Successfully registered with network');
+        break;
+        
+      case 'error':
+        console.error('Server error:', message.error);
+        break;
 
-    default:
-      console.warn('Unknown message type:', message.type);
+      default:
+        console.warn('Unknown message type:', message.type);
     }
   }
 

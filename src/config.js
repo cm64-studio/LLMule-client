@@ -1,4 +1,6 @@
 // src/config.js
+
+// Load environment variables
 require('dotenv').config();
 
 const config = {
@@ -16,5 +18,13 @@ const config = {
     exo: 52415
   }
 };
+
+// Debug config on load
+console.log('Configuration loaded:', {
+  server_url: config.server_url,
+  api_url: config.api_url,
+  api_key_present: !!config.api_key,
+  // Don't log the actual API key
+});
 
 module.exports = config;

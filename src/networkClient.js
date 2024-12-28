@@ -227,9 +227,12 @@ class NetworkClient {
       const registrationMessage = {
         type: 'register',
         apiKey: config.api_key,
-        models: this.models.map(m => m.name),
-        userId: userInfo.userId, // Include the MongoDB userId
-        provider: userInfo.provider // Include provider info if available
+        models: this.models.map(m => ({
+          name: typeof m === 'object' ? m.name : m,
+          type: 'llm',
+          tier: ModelManager.getModelInfo(m).tier
+        })),
+        userId: userInfo.userId
       };
   
       console.log('📝 Sending registration message:', {

@@ -21,6 +21,41 @@ class NetworkClient {
     this.isConnected = false;
     this.activeModels = new Set();
     this.maxConcurrentModels = parseInt(process.env.MAX_CONCURRENT_MODELS || '2');
+    this.lastPong = Date.now();
+    this.heartbeatInterval = null;
+    this.shouldReconnect = true; // Add this flag
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
+    this.reconnectDelay = 5000;
+  }
+
+  setupHeartbeat() {
+    // Clear any existing interval
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+
+    // Setup ping/pong monitoring
+    this.ws.on('ping', () => {
+      try {
+        this.ws.pong();
+        this.lastPong = Date.now();
+      } catch (error) {
+        console.error('Error sending pong:', error);
+      }
+    });
+
+    this.ws.on('pong', () => {
+      this.lastPong = Date.now();
+    });
+
+    // Monitor connection health
+    this.heartbeatInterval = setInterval(() => {
+      if (Date.now() - this.lastPong > 45000) { // 45 seconds timeout
+        console.log('❌ Connection appears dead - reconnecting...');
+        this.reconnect();
+      }
+    }, 15000); // Check every 15 seconds
   }
 
   async getUserInfo() {
@@ -155,25 +190,61 @@ class NetworkClient {
     }
   }
 
+  async reconnect() {
+    if (!this.shouldReconnect) {
+      console.log('Reconnection cancelled - shutdown in progress');
+      return;
+    }
+
+    if (this.ws) {
+      this.ws.terminate();
+    }
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    
+    this.reconnectAttempts++;
+    if (this.reconnectAttempts > this.maxReconnectAttempts) {
+      console.log('Max reconnection attempts reached. Shutting down...');
+      this.cleanup();
+      process.exit(1);
+      return;
+    }
+    
+    console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+    try {
+      await new Promise(resolve => setTimeout(resolve, this.reconnectDelay));
+      await this.connect();
+      this.reconnectAttempts = 0; // Reset on successful connection
+    } catch (error) {
+      console.error('Reconnection failed:', error);
+    }
+  }
 
   async connect() {
+    if (!this.shouldReconnect) {
+      console.log('Connection cancelled - shutdown in progress');
+      return;
+    }
+
     console.log(`\n🔌 Connecting to ${config.server_url}...`);
   
     this.ws = new WebSocket(config.server_url, {
       headers: { 'Authorization': `Bearer ${config.api_key}` }
     });
   
-    // Return a promise for the connection
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Connection timeout'));
-      }, 15000); // 15 second timeout
+      }, 15000);
   
       this.ws.on('open', async () => {
         clearTimeout(timeout);
         console.log('✅ Connected to P2P LLM network');
         this.isConnected = true;
-        this.ws.on('ping', () => this.ws.pong());
+        this.reconnectAttempts = 0;
+        
+        this.setupHeartbeat();
         
         try {
           await this.register();
@@ -182,30 +253,32 @@ class NetworkClient {
           reject(error);
         }
       });
-  
+
       this.ws.on('message', async (data) => {
         try {
-          const message = JSON.parse(data);
+          const message = JSON.parse(data.toString());
           await this.handleMessage(message);
         } catch (error) {
-          console.error('Error handling message:', error);
+          console.error('Error handling websocket message:', error);
         }
       });
   
-      this.ws.on('pong', () => {
-        this.lastPong = Date.now();
-      });
-  
-      this.ws.on('close', (code, reason) => {
+      this.ws.on('close', async (code, reason) => {
         console.log(`❌ Disconnected from network: ${reason} (${code})`);
         this.isConnected = false;
+        
         if (code === 4001) {
           console.error('Authentication failed. Please check your API key');
+          this.shouldReconnect = false;
           reject(new Error('Authentication failed'));
+        } else if (code === 1000 || !this.shouldReconnect) {
+          console.log('Clean disconnection - not attempting to reconnect');
+        } else {
+          await this.reconnect();
         }
       });
   
-      this.ws.on('error', (error) => {
+      this.ws.on('error', async (error) => {
         console.error('🚨 WebSocket error:', error.message);
         this.isConnected = false;
         reject(error);
@@ -251,16 +324,25 @@ class NetworkClient {
   async handleMessage(message) {
     console.log('\n=== Received message from server ===');
     console.log('Message type:', message.type);
-
+    console.log('Message details:', {
+      requestId: message.requestId,
+      model: message.model,
+      hasMessages: !!message.messages
+    });
+  
     switch (message.type) {
       case 'ping':
         this.ws.send(JSON.stringify({ type: 'pong' }));
         break;
-
+  
       case 'completion_request':
+        console.log('Processing completion request:', {
+          model: message.model,
+          messagesCount: message.messages?.length
+        });
         await this.handleCompletionRequest(message);
         break;
-
+  
       case 'registered':
         console.log('Successfully registered with network');
         break;
@@ -268,9 +350,10 @@ class NetworkClient {
       case 'error':
         console.error('Server error:', message.error);
         break;
-
+  
       default:
         console.warn('Unknown message type:', message.type);
+        console.log('Full message:', JSON.stringify(message, null, 2));
     }
   }
 
@@ -351,28 +434,36 @@ class NetworkClient {
 
   async cleanup() {
     console.log('\n🧹 Cleaning up...');
+    this.shouldReconnect = false; // Prevent new reconnection attempts
+
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+
     if (this.ws) {
       try {
-        if (this.isConnected) {
-          this.ws.send(JSON.stringify({
-            type: 'disconnect',
-            message: 'Client shutting down gracefully'
-          }));
+        // Send graceful disconnect message if possible
+        if (this.ws.readyState === WebSocket.OPEN) {
+          await new Promise((resolve) => {
+            this.ws.send(JSON.stringify({
+              type: 'disconnect',
+              message: 'Client shutting down gracefully'
+            }), resolve);
+          });
         }
 
-        this.ws.close();
+        this.ws.terminate();
         console.log('✅ WebSocket connection closed');
-        
-        this.activeModels.clear();
-        
-        await new Promise(resolve => setTimeout(resolve, 500));
       } catch (error) {
         console.error('Error during cleanup:', error);
       }
     }
+
+    this.isConnected = false;
+    // Give time for final messages to be sent
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
 }
-
 
 // Create a single instance that we'll use throughout the application
 const networkClient = new NetworkClient();
@@ -382,12 +473,23 @@ process.on('SIGINT', async () => {
   console.log('\n👋 Gracefully shutting down...');
   try {
     await networkClient.cleanup();
+    process.exit(0);
   } catch (error) {
     console.error('Error during shutdown:', error);
+    process.exit(1);
   }
-  process.exit(0);
 });
 
+process.on('SIGTERM', async () => {
+  console.log('\n🛑 Termination signal received. Cleaning up...');
+  try {
+    await networkClient.cleanup();
+    process.exit(0);
+  } catch (error) {
+    console.error('Error during termination cleanup:', error);
+    process.exit(1);
+  }
+});
 
 process.on('unhandledRejection', (error) => {
   console.error('❌ Unhandled promise rejection:', error);

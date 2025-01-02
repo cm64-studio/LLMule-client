@@ -161,28 +161,18 @@ class NetworkClient {
         });
 
         console.log('\n📨 Registering with server...');
-        const response = await axios.post(`${config.api_url}/auth/register`, {
+        await axios.post(`${config.api_url}/auth/register`, {
           email
         });
 
-        if (response.data.apiKey) {
-          config.api_key = response.data.apiKey;
-          console.log('\n✅ Registration successful!');
-          console.log('📧 Please check your email to verify your account');
-          console.log(`\n🔑 Your API key: ${config.api_key}`);
-          console.log('\n⚠️  Please save this API key in your .env file as API_KEY=your_key');
-
-          const { confirm } = await prompt({
-            type: 'confirm',
-            name: 'confirm',
-            message: 'Have you verified your email? (Check your inbox)',
-          });
-
-          if (!confirm) {
-            console.log('\n❌ Please verify your email before continuing');
-            process.exit(1);
-          }
-        }
+        console.log('\n✅ Registration successful!');
+        console.log('📧 Please check your email for your API key');
+        console.log('\nOnce you receive your API key:');
+        console.log('1. Create a .env file in the project root');
+        console.log('2. Add your API key: API_KEY=your-key-here');
+        console.log('3. Restart the application\n');
+        
+        process.exit(0);
       } catch (error) {
         console.error('\n❌ Registration failed:', error.response?.data?.error || error.message);
         process.exit(1);

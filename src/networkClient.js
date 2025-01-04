@@ -8,6 +8,8 @@ const config = require('./config');
 const ModelDetector = require('./modelDetector');
 const { OllamaClient, LMStudioClient, ExoClient } = require('./llmClients');
 
+const spinner = ora();
+
 class NetworkClient {
   constructor() {
     this.ws = null;
@@ -27,6 +29,10 @@ class NetworkClient {
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
     this.reconnectDelay = 5000;
+    this.muleBalance = 0;
+    this.lastBalanceCheck = null;
+    this.totalRequestsHandled = 0;
+    this.totalTokensProcessed = 0;
   }
 
   setupHeartbeat() {
@@ -60,40 +66,27 @@ class NetworkClient {
 
   async getUserInfo() {
     try {
-      console.log('Getting user info with API key:', config.api_key);
+      spinner.start('Verifying account...');
       
       const response = await axios.get(`${config.api_url}/auth/me`, {
         headers: { 
           'Authorization': `Bearer ${config.api_key}`,
           'Accept': 'application/json'
         },
-        validateStatus: false // To get full response for debugging
+        validateStatus: false
       });
-  
-      console.log('User info response:', {
-        status: response.status,
-        headers: response.headers,
-        data: response.data
-      });
-  
+
       if (response.status !== 200) {
-        console.error('User info request failed:', {
-          status: response.status,
-          data: response.data
-        });
+        spinner.fail('Account verification failed');
+        console.error(chalk.red(`   Error: ${response.data?.error || 'Unknown error'}`));
         return null;
       }
-  
+
+      spinner.succeed('Account verified');
       return response.data;
     } catch (error) {
-      console.error('Failed to get user info:', {
-        message: error.message,
-        response: error.response?.data,
-        config: {
-          url: error.config?.url,
-          headers: error.config?.headers
-        }
-      });
+      spinner.fail('Account verification failed');
+      console.error(chalk.red(`   Error: ${error.message}`));
       return null;
     }
   }
@@ -223,6 +216,8 @@ class NetworkClient {
       headers: { 'Authorization': `Bearer ${config.api_key}` }
     });
   
+    spinner.start('Connecting to P2P LLM network...');
+    
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Connection timeout'));
@@ -230,10 +225,11 @@ class NetworkClient {
   
       this.ws.on('open', async () => {
         clearTimeout(timeout);
-        console.log('✅ Connected to P2P LLM network');
+        spinner.succeed('Connected to P2P LLM network');
         this.isConnected = true;
         this.reconnectAttempts = 0;
         
+        await this.fetchBalance();
         this.setupHeartbeat();
         
         try {
@@ -254,7 +250,7 @@ class NetworkClient {
       });
   
       this.ws.on('close', async (code, reason) => {
-        console.log(`❌ Disconnected from network: ${reason} (${code})`);
+        spinner.fail(`Disconnected from network: ${reason}`);
         this.isConnected = false;
         
         if (code === 4001) {
@@ -279,31 +275,34 @@ class NetworkClient {
 
   async register() {
     try {
+      spinner.start('Registering models with network...');
+      
       const userInfo = await this.getUserInfo();
-      console.log('Got user info for registration:', userInfo);
-  
       if (!userInfo || !userInfo.userId) {
-        console.error('Invalid user info received:', userInfo);
-        throw new Error('Failed to get valid user info for registration');
+        spinner.fail('Registration failed');
+        throw new Error('Could not verify account');
       }
-  
+
       const registrationMessage = {
         type: 'register',
         apiKey: config.api_key,
         models: this.models.map(m => m.name),
-        userId: userInfo.userId, // Include the MongoDB userId
-        provider: userInfo.provider // Include provider info if available
-      };
-  
-      console.log('📝 Sending registration message:', {
         userId: userInfo.userId,
-        modelCount: registrationMessage.models.length,
-        models: registrationMessage.models
+        provider: userInfo.provider
+      };
+
+      // Show available models in a friendly way
+      console.log(chalk.cyan('\n📦 Available Models:'));
+      this.models.forEach(model => {
+        const shortName = model.name.split('/').pop(); // Get just the model name
+        console.log(chalk.gray(`   • ${shortName}`));
       });
-  
+
       this.ws.send(JSON.stringify(registrationMessage));
+      spinner.succeed('Models registered successfully');
     } catch (error) {
-      console.error('Registration failed:', error.message);
+      spinner.fail('Registration failed');
+      console.error(chalk.red(`   Error: ${error.message}`));
       this.isConnected = false;
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.close();
@@ -312,59 +311,43 @@ class NetworkClient {
   }
 
   async handleMessage(message) {
-    console.log('\n=== Received message from server ===');
-    console.log('Message type:', message.type);
-    console.log('Message details:', {
-      requestId: message.requestId,
-      model: message.model,
-      hasMessages: !!message.messages
-    });
-  
+    // Remove the debug logs
     switch (message.type) {
       case 'ping':
         this.ws.send(JSON.stringify({ type: 'pong' }));
         break;
-  
+
       case 'completion_request':
-        console.log('Processing completion request:', {
-          model: message.model,
-          messagesCount: message.messages?.length
-        });
+        spinner.start('Processing request...');
         await this.handleCompletionRequest(message);
         break;
-  
+
       case 'registered':
-        console.log('Successfully registered with network');
+        console.log(chalk.green('\n✨ Your node is ready!'));
+        console.log(chalk.gray('   Waiting for incoming requests...\n'));
         break;
         
       case 'error':
-        console.error('Server error:', message.error);
+        console.error(chalk.red('\n❌ Network Error:'), message.error);
         break;
-  
+
       default:
-        console.warn('Unknown message type:', message.type);
-        console.log('Full message:', JSON.stringify(message, null, 2));
+        // Only log unknown messages in development
+        if (process.env.NODE_ENV === 'development') {
+          console.warn('Unknown message type:', message.type);
+        }
     }
   }
 
   async handleCompletionRequest(message) {
-    console.log('\n=== Processing Completion Request ===');
-    console.log('Request details:', {
-      model: message.model,
-      messageCount: message.messages?.length,
-      temperature: message.temperature,
-      max_tokens: message.max_tokens
-    });
-
     const modelInfo = this.models.find(m => m.name === message.model);
     if (!modelInfo) {
-      console.error(`Model ${message.model} not available`);
+      spinner.fail(`Model ${message.model} not available`);
       this.sendErrorResponse(message.requestId, `Model ${message.model} not available`);
       return;
     }
 
     try {
-      // Check concurrent model limit
       if (this.activeModels.size >= this.maxConcurrentModels &&
         !this.activeModels.has(message.model)) {
         throw new Error('Maximum concurrent models reached');
@@ -372,11 +355,10 @@ class NetworkClient {
 
       this.activeModels.add(message.model);
       const client = this.llmClients[modelInfo.type];
-
-      console.log('Sending to LLM client:', {
-        type: modelInfo.type,
-        model: modelInfo.name
-      });
+      
+      // Show a shorter model name
+      const shortModelName = modelInfo.name.split('/').pop();
+      spinner.text = `Processing request with ${shortModelName}...`;
 
       const response = await client.generateCompletion(
         modelInfo.name,
@@ -387,12 +369,21 @@ class NetworkClient {
         }
       );
 
-      console.log('Got response from LLM:', {
-        model: message.model,
-        responseLength: response.choices?.[0]?.message?.content?.length
-      });
+      const tokens = response.usage?.total_tokens || 0;
+      this.totalTokensProcessed += tokens;
+      this.totalRequestsHandled++;
 
-      // Send response back through WebSocket
+      spinner.succeed(chalk.green('Request completed'));
+      
+      // Only show non-sensitive metrics
+      console.log(chalk.cyan('\n📊 Request Stats:'));
+      console.log(chalk.gray(`   Model: ${shortModelName}`));
+      console.log(chalk.gray(`   Tokens: ${tokens.toLocaleString()}`));
+      console.log(chalk.gray(`   Request #${this.totalRequestsHandled.toLocaleString()}`));
+
+      // Fetch and show new balance
+      await this.fetchBalance();
+
       this.ws.send(JSON.stringify({
         type: 'completion_response',
         requestId: message.requestId,
@@ -400,7 +391,8 @@ class NetworkClient {
       }));
 
     } catch (error) {
-      console.error(`Error processing request for ${message.model}:`, error);
+      spinner.fail(chalk.red('Request failed'));
+      console.error(chalk.gray(`   Error: ${error.message}`));
       this.sendErrorResponse(message.requestId, error.message);
     } finally {
       this.activeModels.delete(message.model);
@@ -422,9 +414,26 @@ class NetworkClient {
     }));
   }
 
+  async fetchBalance() {
+    try {
+      const response = await axios.get(`${config.api_url}/v1/balance`, {
+        headers: { 'Authorization': `Bearer ${config.api_key}` }
+      });
+      
+      this.muleBalance = response.data.mule_balance;
+      this.lastBalanceCheck = response.data.last_updated;
+      
+      console.log(chalk.cyan('\n💰 Current Balance:'));
+      console.log(chalk.white(`   ${this.muleBalance.toFixed(4)} MULE tokens`));
+      console.log(chalk.gray(`   Last updated: ${new Date(this.lastBalanceCheck).toLocaleString()}`));
+    } catch (error) {
+      console.error(chalk.yellow('⚠️  Could not fetch balance'));
+    }
+  }
+
   async cleanup() {
-    console.log('\n🧹 Cleaning up...');
-    this.shouldReconnect = false; // Prevent new reconnection attempts
+    spinner.start('Cleaning up...');
+    this.shouldReconnect = false;
 
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
@@ -432,7 +441,6 @@ class NetworkClient {
 
     if (this.ws) {
       try {
-        // Send graceful disconnect message if possible
         if (this.ws.readyState === WebSocket.OPEN) {
           await new Promise((resolve) => {
             this.ws.send(JSON.stringify({
@@ -443,14 +451,20 @@ class NetworkClient {
         }
 
         this.ws.terminate();
-        console.log('✅ WebSocket connection closed');
+        spinner.succeed('Shutdown complete');
+        
+        // Show final stats
+        console.log(chalk.cyan('\n📈 Session Summary:'));
+        console.log(chalk.white(`   Requests Handled: ${this.totalRequestsHandled}`));
+        console.log(chalk.white(`   Tokens Processed: ${this.totalTokensProcessed}`));
+        console.log(chalk.white(`   Final Balance: ${this.muleBalance.toFixed(4)} MULE`));
       } catch (error) {
-        console.error('Error during cleanup:', error);
+        spinner.fail('Error during cleanup');
+        console.error(chalk.gray(`   ${error.message}`));
       }
     }
 
     this.isConnected = false;
-    // Give time for final messages to be sent
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 }

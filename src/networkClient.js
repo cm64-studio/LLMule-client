@@ -2,7 +2,7 @@
 const ora = require('ora');
 const WebSocket = require('ws');
 const axios = require('axios');
-const { prompt } = require('enquirer');
+const { prompt, MultiSelect } = require('enquirer');
 const chalk = require('chalk');
 const config = require('./config');
 const ModelDetector = require('./modelDetector');
@@ -91,13 +91,73 @@ class NetworkClient {
     }
   }
 
+  async selectModelsToShare(availableModels) {
+    try {
+      console.log(chalk.cyan('\n📦 Available Models:'));
+      availableModels.forEach((model, i) => {
+        const shortName = model.name.split('/').pop();
+        console.log(chalk.gray(`   ${i + 1}. ${shortName}`));
+      });
+
+      console.log(chalk.gray('\nAll models are selected by default'));
+      console.log(chalk.gray('Use [Space] to toggle, [Enter] to confirm'));
+
+      // Format choices for the MultiSelect prompt
+      const choices = availableModels.map(model => ({
+        name: model.name,
+        message: model.name.split('/').pop(),
+        value: model.name,
+        enabled: true,
+        initial: true
+      }));
+
+      const prompt = new MultiSelect({
+        name: 'models',
+        message: 'Choose models to share:',
+        choices,
+        initial: choices.map(c => c.value),
+        validate: value => value.length > 0 ? true : 'Please select at least one model',
+        onCancel: () => {
+          process.exit(0); // Ensure clean exit on Ctrl+C
+        }
+      });
+
+      const selectedModels = await prompt.run();
+      return availableModels.filter(model => selectedModels.includes(model.name));
+    } catch (error) {
+      if (error.message.includes('canceled')) {
+        console.log(chalk.yellow('\n👋 Shutting down...'));
+        process.exit(0);
+      }
+      // If other error occurs, share all models by default
+      console.log(chalk.yellow('\n⚠️  Selection error - sharing all models'));
+      return availableModels;
+    }
+  }
+
   async detectAndConnect() {
     try {
       const availableModels = await this.modelDetector.detectAll();
-      this.models = availableModels;
       
       if (availableModels.length > 0) {
-        console.log(chalk.green(`Found ${availableModels.length} models to share`));
+        console.log(chalk.green(`\n✨ Found ${availableModels.length} ${availableModels.length === 1 ? 'model' : 'models'}`));
+        
+        try {
+          this.models = await this.selectModelsToShare(availableModels);
+        } catch (error) {
+          if (error.message.includes('canceled')) {
+            console.log(chalk.yellow('\n👋 Shutting down...'));
+            process.exit(0);
+          }
+          throw error;
+        }
+        
+        if (this.models.length === availableModels.length) {
+          console.log(chalk.green('\n✓ Sharing all models'));
+        } else {
+          console.log(chalk.green(`\n✓ Sharing ${this.models.length} of ${availableModels.length} models`));
+        }
+        
         await this.connect();
         return;
       }
@@ -105,13 +165,20 @@ class NetworkClient {
       console.log('\nWaiting for LLM services...');
       console.log('Press Ctrl+C to exit\n');
       
-      // Wait before retry
-      await new Promise(r => setTimeout(r, 10000));
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(resolve, 10000);
+        process.once('SIGINT', () => {
+          clearTimeout(timeout);
+          console.log(chalk.yellow('\n👋 Shutting down...'));
+          process.exit(0);
+        });
+      });
+      
       await this.detectAndConnect();
       
     } catch (error) {
       console.error(chalk.red('Connection failed:'), error.message);
-      await new Promise(r => setTimeout(r, 5000));
+      await new Promise(resolve => setTimeout(resolve, 5000));
       await this.detectAndConnect();
     }
   }
@@ -291,10 +358,10 @@ class NetworkClient {
         provider: userInfo.provider
       };
 
-      // Show available models in a friendly way
-      console.log(chalk.cyan('\n📦 Available Models:'));
+      // Show selected models in a friendly way
+      console.log(chalk.cyan('\n📦 Sharing Models:'));
       this.models.forEach(model => {
-        const shortName = model.name.split('/').pop(); // Get just the model name
+        const shortName = model.name.split('/').pop();
         console.log(chalk.gray(`   • ${shortName}`));
       });
 

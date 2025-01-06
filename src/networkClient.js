@@ -489,10 +489,16 @@ class NetworkClient {
       
       this.muleBalance = response.data.mule_balance;
       this.lastBalanceCheck = response.data.last_updated;
+      this.availableTokens = response.data.available_tokens;
       
-      console.log(chalk.cyan('\n💰 Current Balance:'));
-      console.log(chalk.white(`   ${this.muleBalance.toFixed(4)} MULE tokens`));
-      console.log(chalk.gray(`   Last updated: ${new Date(this.lastBalanceCheck).toLocaleString()}`));
+      console.log(chalk.cyan('\n💰 Balance Details:'));
+      console.log(chalk.white(`   ${this.muleBalance.toFixed(6)} MULE tokens`));
+      console.log(chalk.gray('\n   Available Inference Tokens:'));
+      console.log(chalk.gray(`   • Small:  ${this.availableTokens.small.toLocaleString()}`));
+      console.log(chalk.gray(`   • Medium: ${this.availableTokens.medium.toLocaleString()}`));
+      console.log(chalk.gray(`   • Large:  ${this.availableTokens.large.toLocaleString()}`));
+      console.log(chalk.gray(`   • XL:     ${this.availableTokens.xl.toLocaleString()}`));
+      console.log(chalk.gray(`\n   Last updated: ${new Date(this.lastBalanceCheck).toLocaleString()}`));
     } catch (error) {
       console.error(chalk.yellow('⚠️  Could not fetch balance'));
     }
@@ -524,7 +530,7 @@ class NetworkClient {
         console.log(chalk.cyan('\n📈 Session Summary:'));
         console.log(chalk.white(`   Requests Handled: ${this.totalRequestsHandled}`));
         console.log(chalk.white(`   Tokens Processed: ${this.totalTokensProcessed}`));
-        console.log(chalk.white(`   Final Balance: ${this.muleBalance.toFixed(4)} MULE`));
+        console.log(chalk.white(`   Final Balance: ${this.muleBalance.toFixed(6)} MULE`));
       } catch (error) {
         spinner.fail('Error during cleanup');
         console.error(chalk.gray(`   ${error.message}`));

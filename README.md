@@ -2,6 +2,9 @@
 
 A peer-to-peer client for sharing Large Language Models (LLMs) across the LLMule network. Run your local LLMs and share them with the community.
 
+🌐 **Official Website**: [https://llmule.xyz](https://llmule.xyz)
+💬 **Join our Community**: [Discord Channel](https://discord.gg/TKmrBfuj2m)
+
 ## Features
 
 - Automatic detection of local LLM models (Ollama & LM Studio)
@@ -37,14 +40,14 @@ cp .env.example .env
 
 ## Configuration
 
-Edit `.env` file with your settings:
+Edit `.env` file with your settings. Don't worry about the API key - you'll get it automatically during the first run registration process at [llmule.xyz](https://llmule.xyz).
 
 ```env
-# Required
-API_KEY=your_api_key_here
+# Server Configuration
+API_URL=https://api.llmule.xyz
+SERVER_URL=wss://api.llmule.xyz/llm-network
 
-# Optional
-SERVER_URL=ws://localhost:3000/llm-network
+# LLM Provider URLs (defaults)
 OLLAMA_URL=http://localhost:11434
 LMSTUDIO_URL=http://localhost:1234/v1
 
@@ -94,10 +97,11 @@ EXO_URL=http://localhost:52415
 npm start
 ```
 
-3. Follow the interactive setup:
-   - Enter your API key if not configured
-   - Select models to share
-   - Confirm connection to network
+3. First-time setup:
+   - On first run, you'll be guided through the registration process at llmule.xyz
+   - Your API key will be automatically configured after registration
+   - Select the models you want to share
+   - The client will automatically connect to the LLMule network
 
 ## Running as a Service
 

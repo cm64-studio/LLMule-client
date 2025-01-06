@@ -15,7 +15,7 @@ A peer-to-peer client for sharing Large Language Models (LLMs) across the LLMule
 
 ## Prerequisites
 
-- Node.js v18 or higher
+- Node.js v20 or higher
 - One of the following LLM backends:
   - [Ollama](https://ollama.ai) (recommended)
   - [LM Studio](https://lmstudio.ai)
@@ -134,20 +134,6 @@ WantedBy=multi-user.target
 ```bash
 sudo systemctl enable llmule-client
 sudo systemctl start llmule-client
-```
-
-### Docker Support
-
-Build and run with Docker:
-
-```bash
-docker build -t llmule-client .
-docker run -d \
-  --name llmule-client \
-  --restart unless-stopped \
-  -v $(pwd)/.env:/app/.env \
-  --network host \
-  llmule-client
 ```
 
 ## Monitoring

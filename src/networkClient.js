@@ -423,7 +423,6 @@ class NetworkClient {
       this.activeModels.add(message.model);
       const client = this.llmClients[modelInfo.type];
       
-      // Show a shorter model name
       const shortModelName = modelInfo.name.split('/').pop();
       spinner.text = `Processing request with ${shortModelName}...`;
 
@@ -440,22 +439,26 @@ class NetworkClient {
       this.totalTokensProcessed += tokens;
       this.totalRequestsHandled++;
 
-      spinner.succeed(chalk.green('Request completed'));
-      
-      // Only show non-sensitive metrics
-      console.log(chalk.cyan('\n📊 Request Stats:'));
-      console.log(chalk.gray(`   Model: ${shortModelName}`));
-      console.log(chalk.gray(`   Tokens: ${tokens.toLocaleString()}`));
-      console.log(chalk.gray(`   Request #${this.totalRequestsHandled.toLocaleString()}`));
-
-      // Fetch and show new balance
-      await this.fetchBalance();
-
+      // Send response first
       this.ws.send(JSON.stringify({
         type: 'completion_response',
         requestId: message.requestId,
         response: response
       }));
+
+      // Wait a bit for the transaction to be processed
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Then show completion and updated balance
+      spinner.succeed(chalk.green('Request completed'));
+      
+      console.log(chalk.cyan('\n📊 Request Stats:'));
+      console.log(chalk.gray(`   Model: ${shortModelName}`));
+      console.log(chalk.gray(`   Tokens: ${tokens.toLocaleString()}`));
+      console.log(chalk.gray(`   Request #${this.totalRequestsHandled.toLocaleString()}`));
+
+      // Fetch and show new balance after transaction
+      await this.fetchBalance();
 
     } catch (error) {
       spinner.fail(chalk.red('Request failed'));
